@@ -14482,7 +14482,7 @@ class Renderer {
 	constructor(width = 1024, height = 768) {
 		const canvas = createCanvas(width, height);
 		const gl = canvas.getContext("webgl", {
-			antialias            : false,
+			antialias            : gbGetConstBool("antialias"),
 			alpha                : false,
 			stencil              : false,
 			preserveDrawingBuffer: false,
@@ -15430,6 +15430,29 @@ window.addEventListener("load", () => {
 })();
 
 
+function gbGetConst(key, def) {
+	const kv = location.hash
+		.slice(1)
+		.split("&")
+		.filter(s => s.length)
+		.map(s => s.split("="))
+		.find(([k]) => k === key);
+	
+	if ( !kv )
+		return def;
+	
+	return kv[1] === undefined ? "" : kv[1];
+}
+function gbGetConstBool(key) {
+	return gbGetConst(key) !== undefined;
+}
+function gbGetConstI(key, def) {
+	const n = gbGetConst(key, def);
+	if ( !isFinite(n) )
+		return def;
+	return n | 0;
+}
+
 
  
 
@@ -15624,6 +15647,31 @@ function SimpleTex(gl, wasm) {
 		this._nullTexture = [glTexture, id];
 		return this._nullTexture[0];
 	}
+	function anisotropic(level = 1e9) {
+		if ( gl.__EXT_texture_filter_anisotropic === null )
+			return null;
+		
+		if ( !gl.__EXT_texture_filter_anisotropic ) {
+			const ext = gl.getSupportedExtensions().find(e => e.match(/texture_filter_anisotropic/i));
+			if ( !ext ) {
+				gl.__EXT_texture_filter_anisotropic = null;
+				return null;
+			}
+			
+			gl.__EXT_texture_filter_anisotropic = gl.getExtension(ext);
+			if ( !gl.__EXT_texture_filter_anisotropic ) {
+				gl.__EXT_texture_filter_anisotropic = null;
+				return null;
+			}
+		}
+		
+		const glTFA = gl.__EXT_texture_filter_anisotropic;
+		const max = gl.getParameter(glTFA.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+		level = Math.min(level, max);
+		//console.log({level})
+		gl.texParameterf(gl.TEXTURE_2D, glTFA.TEXTURE_MAX_ANISOTROPY_EXT, level);
+		return level;
+	}
 	async function requestTexture(guid) {
 		try {
 			const guidHex = u32ToHex(guid);
@@ -15636,12 +15684,21 @@ function SimpleTex(gl, wasm) {
 			glTextures[id] = this.getNullTexture();
 			Module.APIWASM_TEX_answerTexture(guid, id, 0);
 		
-			//const ab = await APIJS.FS.getFile(`/textures-basis-q255-level1/${ guidHex }-q255-level1.basis`);
-			const ab = await APIJS.FS.getFile(`/textures-basis-q1-level1/${ guidHex }-q1-level1.basis`);
-			
+			const qmap = {
+				low : `/textures-basis-q1-level1/${ guidHex }-q1-level1.basis`,
+				high: `/textures-basis-q255-level1/${ guidHex }-q255-level1.basis`,
+			};
+			const ab = await APIJS.FS.getFile( qmap[gbGetConst("tex_q")] || qmap.low );
+
 			gl.bindTexture(gl.TEXTURE_2D, glTexture);
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+			
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR);
+			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+			
+			if ( gbGetConstBool("anisotropic") )
+				anisotropic( gbGetConstI("anisotropic") );
 			
 			if ( 1 ) {
 				const support = await basisThreadControlPool.transcode(ab, basisThreadControlPool.detectSupport(gl));
